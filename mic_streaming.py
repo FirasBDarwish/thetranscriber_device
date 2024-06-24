@@ -69,7 +69,7 @@ class Audio(object):
 
     def read_resampled(self):
         """Return a block of audio data resampled to 16000hz, blocking if necessary."""
-        return self.resample(data=self.buffe_queue.get(),
+        return self.resample(data=self.buffer_queue.get(),
                              input_rate=self.input_rate)
 
     def read(self):
@@ -147,6 +147,15 @@ class VADAudio(Audio):
                     ring_buffer.clear()
 
 def main(ARGS):
+
+    p = pyaudio.PyAudio()
+
+    for i in range(p.get_device_count()):
+        info = p.get_device_info_by_index(i)
+        print(f"Device {i}: {info['name']}, Input channels: {info['maxInputChannels']}, Output channels: {info['maxOutputChannels']}")
+
+    p.terminate()
+
     # Load DeepSpeech model
     if os.path.isdir(ARGS.model):
         model_dir = ARGS.model

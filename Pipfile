@@ -11,6 +11,7 @@ halo = "~=0.0.18"
 numpy = "<2.0.0"
 scipy = ">=1.1.0"
 speechrecognition = "*"
+jack-client = "*"
 
 [dev-packages]
 
