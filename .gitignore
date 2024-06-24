@@ -150,5 +150,5 @@ cython_debug/
 
 .pypirc
 
-# .pbmm files (model weights for DeepSpeech)
-*.pbmm
+# # .pbmm files (model weights for DeepSpeech)
+# *.pbmm
