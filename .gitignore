@@ -149,4 +149,6 @@ dmypy.json
 cython_debug/
 
 .pypirc
-.pbmm
+
+# .pbmm files (model weights for DeepSpeech)
+*.pbmm
