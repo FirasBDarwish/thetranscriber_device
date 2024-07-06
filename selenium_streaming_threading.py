@@ -15,6 +15,19 @@ import sys
 from dotenv import dotenv_values
 import google.generativeai as genai
 
+import time
+
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from webdriver_manager.chrome import ChromeDriverManager
+
+from collections import deque
+
 logging.basicConfig(level=20)
 config = dotenv_values(".env")
 
@@ -156,7 +169,7 @@ class VADAudio(Audio):
                     yield None
                     ring_buffer.clear()
 
-def streaming(model=None, sample_rate=16000, vad_aggressiveness=3, audio='Aggregate Device'):
+def streaming(meetscode: str, model=None, sample_rate=16000, vad_aggressiveness=3, audio='Aggregate Device'):
     """
     Function that streams audio from audio device (depending on how audio is set), recognizes
     human voice, and creates a transcription.
@@ -187,9 +200,8 @@ def streaming(model=None, sample_rate=16000, vad_aggressiveness=3, audio='Aggreg
         info = p.get_device_info_by_index(i)
         if info['name'] == audio:
             device = i
-        print(f"Device {i}: {info['name']}, Input channels: {info['maxInputChannels']}, Output channels: {info['maxOutputChannels']}")
+        # print(f"Device {i}: {info['name']}, Input channels: {info['maxInputChannels']}, Output channels: {info['maxOutputChannels']}")
 
-    print("using device:", device)
     if device is None:
         print("device not recognized, unrecognized behavior..", file=sys.stderr)
 
@@ -229,20 +241,100 @@ def streaming(model=None, sample_rate=16000, vad_aggressiveness=3, audio='Aggreg
     context_lock = threading.Lock()
 
     # Function to get user input and control loop execution
-    def get_user_input(command_queue, llm):
+    def get_user_input(command_queue, llm, meetscode):
+
+        # Set up Google Meets connection with Meets
+        opt = Options()
+        opt.add_argument('--disable-blink-features=AutomationControlled')
+        opt.add_argument('--start-maximized')
+        opt.add_experimental_option("prefs", {
+        
+            "profile.default_content_setting_values.media_stream_mic": 0,
+            "profile.default_content_setting_values.media_stream_camera": 0,
+            "profile.default_content_setting_values.geolocation": 0,
+            "profile.default_content_setting_values.notifications": 0
+        })
+
+        driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=opt)
+        driver.get("https://meet.google.com/" + meetscode)
+        # driver.get("https://meet.google.com/")
+        print("launched")
+
+         # Wait up to 10 seconds for the notifications about mic and camera being off to become clickable
+        button = WebDriverWait(driver, 10).until(
+            EC.element_to_be_clickable((By.XPATH, "//span[text()='Continue without microphone and camera']/ancestor::button"))
+        )
+        button.click()
+
+        # Find the input field by its ID
+        # input_field = driver.find_element(By.ID, 'c28')
+        input_field = WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.ID, "c22"))
+        )
+        # Clear any existing text in the input field
+        input_field.clear()
+        # Enter your name into the input field
+        input_field.send_keys('TheTranscriber')
+        # Send ENTER key to submit the form (if applicable)
+        input_field.send_keys(Keys.ENTER)
+
+        # Explicitly wait for the button to be clickable
+        button = WebDriverWait(driver, 40).until(
+            EC.element_to_be_clickable((By.XPATH, "//button[@aria-label='Chat with everyone']"))
+        )
+        # Click the button
+        button.click()
+
+        message_text = "Hello, world! I am TheTranscriber, your personal.. transcriber! (didn't expect that, did you?). Feel free to ask me anything about the conversation so far. Just start your message with '@TheTranscriber' and ask!\n\nIf you want to pause (don't want me listening), type '@TheTranscriber p'.\nIf you want to resume the transcription, type '@TheTranscriber r'.\nIf you want to me to quit, type '@TheTranscriber q'."
+        # Find the textarea by its ID (bfTqV in this case)
+        textarea = WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.XPATH, "//textarea[@jsname='YPqjbf' and @class='qdOxv-fmcmS-wGMbrd xYOaDe' and @aria-label='Send a message' and @placeholder='Send a message']"))
+        )
+        # Clear any existing text in the textarea (if needed)
+        textarea.clear()
+        # Enter text into the textarea
+        textarea.send_keys(message_text)
+
+        # Find the button to send the message by its XPath
+        send_button = driver.find_element(By.XPATH, "//button[@aria-label='Send a message']")
+        # Click the send button
+        send_button.click()
+        messages_received = deque()
+        messages_received_index = 1
         nonlocal context
+        quitting=False
         while True:
-            command = input("Enter 'p', 'r', or 'q': ").strip().lower()
-            if(command not in ['p','r','q']):
+            messages = driver.find_elements(By.XPATH, "//div[@jscontroller='RrV5Ic']")
+            if(len(messages)-messages_received_index > 0):
+                for iter in range(len(messages)-messages_received_index):
+                    if(messages[messages_received_index].text[0:15] == "@TheTranscriber"):
+                        if messages[messages_received_index].text == "@TheTranscriber p" or messages[messages_received_index].text == "@TheTranscriber r":
+                            command_queue.put(messages[messages_received_index].text[-1])
+                        elif messages[messages_received_index].text == "@TheTranscriber q":
+                            # print("before")
+                            command = messages[messages_received_index].text[-1]
+                            driver.quit()
+                            # print("after")
+                            command_queue.put(command)
+                            quitting=True
+                            break
+                        else:
+                            messages_received.append(messages[messages_received_index].text[15:])
+                    messages_received_index+=1
+                if quitting:
+                    break
+            if(len(messages_received) > 0):
+                user_query = messages_received.popleft()
                 with context_lock:
-                    prompt = ("You are gtiven a transcript of a conversation. Afterwards, you will be asked a question about the conversation, please respond based on the information in the transcript.\n Transcript: " + context + "\n\n" + command)
-                print("prompt:", prompt)
+                    print("Context:", context)
+                    prompt = ("You are given a transcript of a conversation. Afterwards, you will be asked a question about the conversation, please respond based on the information in the transcript.\n Transcript: " + context + "\n\n" + user_query)
                 response = llm.generate_content(prompt)
+                reply_text = user_query + "\n\nTheTranscriber: " + response.text
+                textarea.clear()
+                # Enter text into the textarea
+                textarea.send_keys(reply_text)
+                send_button.click()
                 print(response.text)
-            else:
-                command_queue.put(command)
-            if command == 'q':
-                break
 
     # Main function to process frames
     def process_frames(frames, stream_context, stop_event):
@@ -250,23 +342,27 @@ def streaming(model=None, sample_rate=16000, vad_aggressiveness=3, audio='Aggreg
         for frame in frames:
             if stop_event.is_set():
                 break
-            process_frames_flag.wait()  # Wait if flag is cleared (paused)
-            if frame is not None:
-                # if spinner: spinner.start()
-                logging.debug("streaming frame")
-                stream_context.feedAudioContent(np.frombuffer(frame, np.int16))
+            if process_frames_flag.is_set():  # Wait if flag is cleared (paused)
+                if frame is not None:
+                    # if spinner: spinner.start()
+                    logging.debug("streaming frame")
+                    stream_context.feedAudioContent(np.frombuffer(frame, np.int16))
+                else:
+                    # if spinner: spinner.stop()
+                    logging.debug("end utterence")
+                    text = stream_context.finishStream()
+                    # print("Recognized: %s" % text)
+                    with context_lock:
+                        context+=("\n" + text)
+                    # print("context:", context)
+                    stream_context = model.createStream()
             else:
-                # if spinner: spinner.stop()
-                logging.debug("end utterence")
-                text = stream_context.finishStream()
-                # print("Recognized: %s" % text)
-                with context_lock:
-                    context+=("\n" + text)
-                # print("context:", context)
-                stream_context = model.createStream()
+                continue
+
+        
     
     # Start the user input thread
-    input_thread = threading.Thread(target=get_user_input, args=(command_queue, llm))
+    input_thread = threading.Thread(target=get_user_input, args=(command_queue, llm, meetscode))
     input_thread.start()
 
     # Start processing frames
@@ -293,4 +389,13 @@ def streaming(model=None, sample_rate=16000, vad_aggressiveness=3, audio='Aggreg
     input_thread.join()
 
 if __name__ == '__main__':
-    streaming('deepspeech-0.9.3-models.pbmm', 44100, audio="Firas_Device (Python Device)")
+    import argparse
+
+    parser = argparse.ArgumentParser(description="TheTranscriber: your personal listening and responding GoogleMeets bot")
+    parser.add_argument('--meetscode', help='Specify the meetscode value (format: aaa-aaa-aaa)')
+    
+    args = parser.parse_args()
+    if args.meetscode:
+        streaming(args.meetscode, 'deepspeech-0.9.3-models.pbmm', 44100)
+    else:
+        print("Error: No GoogleMeets code provided. Ending..")
