@@ -12,6 +12,11 @@ numpy = "<2.0.0"
 scipy = ">=1.1.0"
 speechrecognition = "*"
 jack-client = "*"
+google-generativeai = "*"
+python-dotenv = "*"
+selenium = "*"
+webdriver-manager = "*"
+regex = "*"
 
 [dev-packages]
 
